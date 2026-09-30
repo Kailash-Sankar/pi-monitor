@@ -5,6 +5,14 @@
   "type": "module",
   "license": "MIT",
   "author": "Kailash Sankar",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kailash-Sankar/pi-monitor.git"
+  },
+  "homepage": "https://github.com/Kailash-Sankar/pi-monitor#readme",
+  "bugs": {
+    "url": "https://github.com/Kailash-Sankar/pi-monitor/issues"
+  },
   "files": [
     "src",
     "README.md",
