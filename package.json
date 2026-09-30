@@ -1,0 +1,32 @@
+{
+  "name": "pi-monitor",
+  "version": "0.0.0",
+  "description": "Wake the agent once when a background command finishes, matches output, or goes quiet. No polling.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Kailash Sankar",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "agent",
+    "monitor",
+    "background"
+  ],
+  "engines": {
+    "node": ">=22.6"
+  }
+}
