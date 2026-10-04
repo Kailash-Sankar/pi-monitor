@@ -20,6 +20,8 @@ export type FireReason =
 export interface MatcherOptions {
   /** Regex source. The monitor fires when any output line matches. */
   match?: string;
+  /** Regex flags, e.g. "i" for case-insensitive. */
+  flags?: string;
   /** Silence threshold in ms. 0 disables quiet detection. */
   timeoutMs?: number;
 }
@@ -38,7 +40,7 @@ export class ConditionMatcher {
   constructor(options: MatcherOptions, now: number) {
     if (options.match !== undefined && options.match !== "") {
       try {
-        this.pattern = new RegExp(options.match);
+        this.pattern = new RegExp(options.match, options.flags ?? "");
       } catch (err) {
         throw new Error(`invalid match pattern: ${(err as Error).message}`);
       }

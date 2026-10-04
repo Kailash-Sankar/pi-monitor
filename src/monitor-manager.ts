@@ -6,7 +6,7 @@
  * involved — the agent is woken once, on a condition.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createWriteStream, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +35,8 @@ export interface MonitorRecord {
   /** instruction delivered to the agent on wake */
   onDone?: string;
   startedAt: number;
+  /** when the monitor left the running state (fired or stopped) */
+  endedAt?: number;
   status: MonitorStatus;
   cause?: FireCause;
   firedAt?: number;
@@ -50,6 +52,11 @@ export interface ManagerHooks {
   changed(): void;
   /** Clock, injectable for tests. */
   now(): number;
+}
+
+export interface ManagerOptions {
+  /** Process spawner. Injectable so the lifecycle can be tested without processes. */
+  spawn?: typeof spawn;
 }
 
 interface Entry {
@@ -68,17 +75,40 @@ const MAX_LINE_LENGTH = 64 * 1024;
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 /** Node clamps setTimeout delays above this and fires almost immediately. */
 const MAX_TIMER_MS = 2_147_483_647;
+/** Cap on simultaneously running monitors. */
+const MAX_RUNNING_MONITORS = 25;
+/** How long a finished monitor stays listed before being pruned. */
+const RETAIN_FINISHED_MS = 5 * 60 * 1000;
 
 /**
  * Kill an entire process tree. Because children are spawned detached, their pid
- * is the process-group id, so a negative pid signals the whole group. This runs
- * on every fire, including a clean exit, so a command that backgrounds a child
- * and exits does not leave that child orphaned. Escalates to SIGKILL if the
- * group is still alive shortly after SIGTERM.
+ * is the process-group id on POSIX, so a negative pid signals the whole group.
+ * This runs on every fire, including a clean exit, so a command that backgrounds
+ * a child and exits does not leave that child orphaned. Escalates to SIGKILL if
+ * the group is still alive shortly after SIGTERM.
+ *
+ * On Windows the group model differs, so `taskkill /T /F` is used instead. That
+ * path is untested here (developed on macOS).
  */
 function killTree(child: ReturnType<typeof spawn> | undefined): void {
   if (!child || child.pid === undefined) return;
   const pid = child.pid;
+
+  if (process.platform === "win32") {
+    try {
+      spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+      });
+    } catch {
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+    }
+    return;
+  }
+
   const signalGroup = (sig: NodeJS.Signals): void => {
     try {
       process.kill(-pid, sig);
@@ -105,20 +135,29 @@ function killTree(child: ReturnType<typeof spawn> | undefined): void {
 export class MonitorManager {
   private readonly entries = new Map<string, Entry>();
   private readonly hooks: ManagerHooks;
+  private readonly spawnProcess: typeof spawn;
   private seq = 0;
 
-  constructor(hooks: ManagerHooks) {
+  constructor(hooks: ManagerHooks, options: ManagerOptions = {}) {
     this.hooks = hooks;
+    this.spawnProcess = options.spawn ?? spawn;
+  }
+
+  /** Current clock, from the injected hooks. */
+  now(): number {
+    return this.hooks.now();
   }
 
   createProcess(opts: {
     command: string;
     match?: string;
+    flags?: string;
     timeoutSeconds?: number;
     label?: string;
     onDone?: string;
     cwd?: string;
   }): MonitorRecord {
+    this.assertCapacity();
     const now = this.hooks.now();
     const timeoutSeconds = opts.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
     if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0) {
@@ -128,12 +167,17 @@ export class MonitorManager {
 
     // Build the matcher first: an invalid pattern must throw before any
     // temp dir or file handle is created.
-    const matcher = new ConditionMatcher({ match: opts.match, timeoutMs }, now);
+    const matcher = new ConditionMatcher(
+      { match: opts.match, flags: opts.flags, timeoutMs },
+      now,
+    );
 
     const id = String(++this.seq);
     const dir = mkdtempSync(join(tmpdir(), "pi-monitor-"));
     const outputPath = join(dir, "output.log");
     const stream = createWriteStream(outputPath, { flags: "a" });
+    // Capture is best effort: a file error must never crash the host.
+    stream.on("error", () => {});
 
     const record: MonitorRecord = {
       id,
@@ -150,7 +194,7 @@ export class MonitorManager {
 
     // detached spawns its own process group so we can kill the whole tree.
     // Killing just the shell would orphan grandchildren (e.g. `sh -c 'a; b'`).
-    const child = spawn(opts.command, {
+    const child = this.spawnProcess(opts.command, {
       shell: true,
       cwd: opts.cwd,
       detached: true,
@@ -160,6 +204,7 @@ export class MonitorManager {
 
     // Cap the captured log so a chatty command cannot fill the disk.
     const writeOut = (chunk: Buffer): void => {
+      if (stream.writableEnded || stream.destroyed) return;
       if (entry.written >= MAX_LOG_BYTES) return;
       const remaining = MAX_LOG_BYTES - entry.written;
       if (chunk.length <= remaining) {
@@ -231,6 +276,7 @@ export class MonitorManager {
   }
 
   createTimer(opts: { prompt: string; delaySeconds: number; label?: string }): MonitorRecord {
+    this.assertCapacity();
     const delaySeconds = opts.delaySeconds;
     if (!Number.isFinite(delaySeconds) || delaySeconds < 0) {
       throw new Error("delaySeconds must be a non-negative number");
@@ -265,7 +311,9 @@ export class MonitorManager {
     return record;
   }
 
+  /** List monitors, pruning finished ones past the retention window. */
   list(): MonitorRecord[] {
+    this.prune();
     return [...this.entries.values()].map((e) => e.record);
   }
 
@@ -275,6 +323,7 @@ export class MonitorManager {
     if (!entry) return "unknown";
     if (entry.record.status !== "running") return "not-running";
     entry.record.status = "stopped";
+    entry.record.endedAt = this.hooks.now();
     if (entry.interval) clearInterval(entry.interval);
     if (entry.timer) clearTimeout(entry.timer);
     killTree(entry.child);
@@ -289,24 +338,67 @@ export class MonitorManager {
       if (entry.interval) clearInterval(entry.interval);
       if (entry.timer) clearTimeout(entry.timer);
       if (entry.record.status === "running") killTree(entry.child);
-      entry.stream?.end();
-      if (entry.dir) {
-        try {
-          rmSync(entry.dir, { recursive: true, force: true });
-        } catch {
-          // best effort
-        }
-      }
+      this.dispose(entry);
     }
     this.entries.clear();
+  }
+
+  /**
+   * Close a monitor's output stream and remove its temp dir once the stream is
+   * fully closed. Removing the dir before the flush finishes races the write.
+   */
+  private dispose(entry: Entry): void {
+    const dir = entry.dir;
+    const stream = entry.stream;
+    if (!dir) return;
+    const removeDir = (): void => {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
+    };
+    if (!stream || stream.closed) {
+      removeDir();
+      return;
+    }
+    stream.once("close", removeDir);
+    try {
+      stream.end();
+    } catch {
+      // already ending
+    }
+  }
+
+  private assertCapacity(): void {
+    let running = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.record.status === "running") running++;
+    }
+    if (running >= MAX_RUNNING_MONITORS) {
+      throw new Error(
+        `too many running monitors (max ${MAX_RUNNING_MONITORS}); stop one first`,
+      );
+    }
+  }
+
+  private prune(): void {
+    const now = this.hooks.now();
+    for (const [id, entry] of this.entries) {
+      if (entry.record.status === "running") continue;
+      const endedAt = entry.record.endedAt ?? entry.record.startedAt;
+      if (now - endedAt >= RETAIN_FINISHED_MS) this.entries.delete(id);
+    }
   }
 
   private fire(id: string, cause: FireCause): void {
     const entry = this.entries.get(id);
     if (!entry || entry.record.status !== "running") return;
+    const now = this.hooks.now();
     entry.record.status = "fired";
     entry.record.cause = cause;
-    entry.record.firedAt = this.hooks.now();
+    entry.record.firedAt = now;
+    entry.record.endedAt = now;
     if (cause.kind === "exited") entry.record.exitCode = cause.code;
     if (entry.interval) clearInterval(entry.interval);
     if (entry.timer) clearTimeout(entry.timer);

@@ -2,6 +2,16 @@
 
 Notable changes to `@ksankar/pi-monitor`.
 
+## 0.2.0
+
+- Prune finished monitors after a 5-minute retention window, so `MonitorList` and `/monitors` do not grow unbounded.
+- Cap concurrent monitors at 25 and return a clear error past the limit.
+- Kill the process tree on Windows via `taskkill /T /F` (untested; developed on macOS).
+- Add `flags` for `match`, e.g. `flags="i"` for case-insensitive matching.
+- `MonitorList` now uses the manager's injected clock.
+- Add `npm run typecheck` (`tsc --noEmit`) and expand tests: `MonitorManager` lifecycle (fire-once, stop, prune, cap, quiet, errors) and `src/lines.ts`.
+- Fix: handle capture-stream errors and remove temp dirs only after the stream closes (previously a race could emit `ENOENT`/write-after-end).
+
 ## 0.1.2
 
 Clarity and correctness fixes.

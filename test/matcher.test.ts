@@ -30,6 +30,18 @@ test("is one-shot: no further fires after a match", () => {
   assert.equal(m.onTick(100000), null);
 });
 
+test("is case-sensitive by default but honours the i flag", () => {
+  const sensitive = new ConditionMatcher({ match: "listening" }, 0);
+  assert.equal(sensitive.onLine("Listening on :3000", 1), null);
+
+  const insensitive = new ConditionMatcher({ match: "listening", flags: "i" }, 0);
+  assert.notEqual(insensitive.onLine("Listening on :3000", 1), null);
+});
+
+test("rejects invalid flags", () => {
+  assert.throws(() => new ConditionMatcher({ match: "x", flags: "zz" }, 0), /invalid match pattern/);
+});
+
 test("fires on exit with code and signal", () => {
   const m = new ConditionMatcher({}, 0);
   assert.deepEqual(m.onExit(1), { kind: "exited", code: 1, signal: null });

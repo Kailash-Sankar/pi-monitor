@@ -53,7 +53,7 @@ test("bounds memory by emitting an oversized newline-free fragment", () => {
   const lines: string[] = [];
   const reader = createLineReader((l) => lines.push(l), 100);
   reader.write(Buffer.from("x".repeat(50)));
-  assert.deepEqual(lines, []);
+  assert.equal(lines.length, 0);
   reader.write(Buffer.from("y".repeat(60)));
   assert.equal(lines.length, 1);
   assert.equal(lines[0].length, 110);

@@ -122,7 +122,12 @@ export default function (pi: ExtensionAPI) {
       match: Type.Optional(
         Type.String({
           description:
-            "Regular expression. Wake when an output line matches, e.g. 'listening on'.",
+            "Regular expression. Wake when an output line matches, e.g. 'listening on'. Case-sensitive unless flags is set.",
+        }),
+      ),
+      flags: Type.Optional(
+        Type.String({
+          description: "Regex flags for match, e.g. 'i' for case-insensitive.",
         }),
       ),
       timeoutSeconds: Type.Optional(
@@ -147,6 +152,7 @@ export default function (pi: ExtensionAPI) {
       const record = manager.createProcess({
         command: params.command,
         match: params.match,
+        flags: params.flags,
         timeoutSeconds: params.timeoutSeconds,
         onDone: params.onDone,
         label: params.label,
@@ -209,9 +215,9 @@ export default function (pi: ExtensionAPI) {
     async execute() {
       const records = manager.list();
       if (records.length === 0) {
-        return { content: [{ type: "text", text: "No monitors." }], details: {} };
+        return { content: [{ type: "text", text: "No monitors." }], details: { count: 0 } };
       }
-      const now = Date.now();
+      const now = manager.now();
       const text = records
         .map((r) => {
           const head = `#${r.id} [${r.status}] ${r.label}`;

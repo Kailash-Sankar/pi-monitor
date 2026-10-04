@@ -53,6 +53,7 @@ Returns immediately with an id. Output is captured to a temp file whose path is 
 |---|---|
 | `command` | Shell command to run in the background. |
 | `match` | Optional regex. Wake when an output line matches. |
+| `flags` | Optional regex flags for `match`, e.g. `i` for case-insensitive. |
 | `timeoutSeconds` | Silence threshold. Any output renews it. Default 300. `0` disables. The command is **stopped** when it fires. |
 | `onDone` | What to do when it fires — delivered as the wake instruction. |
 | `label` | Short human-readable label. |
@@ -80,14 +81,18 @@ Inspect and cancel monitors. The footer also shows a live count, e.g. `⏱ 1 mon
 ## Limitations
 
 - Monitors live in memory and do not survive a Pi restart or session switch.
-- `match` is tested against complete lines of output.
+- `match` is tested against complete lines of output. Finished monitors are listed for 5 minutes, then pruned.
 - No repeat/recurring mode by design; re-arm explicitly.
+- At most 25 monitors run at once.
+- Process-tree cleanup on Windows uses `taskkill` and is untested on that platform.
 
 ## Development
 
 ```bash
-npm test        # node --test, no install needed (Node >= 22.6)
-pi -e ./        # load locally
+npm test           # node --test (no install needed, Node >= 22.6)
+npm install        # dev tooling: tsc and Pi type packages
+npm run typecheck  # tsc --noEmit
+pi -e ./           # load locally
 ```
 
 ## License
