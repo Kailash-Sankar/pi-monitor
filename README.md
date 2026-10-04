@@ -2,7 +2,7 @@
 
 Wake the agent once when a background command finishes, matches output, or goes quiet. No polling.
 
-> **Status:** early development. Not yet published.
+![pi-monitor in action](https://raw.githubusercontent.com/Kailash-Sankar/pi-monitor/main/assets/monitor-preview.png)
 
 ## Why
 
@@ -16,6 +16,8 @@ Agents stall by polling: `sleep 15 && curl ...`, or a `while` loop that checks u
 
 It costs zero model tokens while waiting.
 
+In the screenshot above, the agent waits for a deployment artifact by pushing the polling loop into the background shell — no blocked turn, no repeated status checks — and wakes once when the artifact appears.
+
 ## Install
 
 ```bash
@@ -28,6 +30,9 @@ Try it locally during development:
 ```bash
 pi -e ./pi-monitor
 ```
+
+> Installing while a Pi session is already running? Extensions load at session
+> start, so run `/reload` or start a new session for the tools to appear.
 
 ## Tools
 

@@ -1,6 +1,6 @@
 {
   "name": "@ksankar/pi-monitor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Wake the agent once when a background command finishes, matches output, or goes quiet. No polling.",
   "type": "module",
   "license": "MIT",
@@ -22,7 +22,13 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/Kailash-Sankar/pi-monitor/main/assets/monitor-preview.png"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "publishConfig": {
     "access": "public"
@@ -36,7 +42,9 @@
     "pi-extension",
     "agent",
     "monitor",
-    "background"
+    "background",
+    "wake",
+    "polling"
   ],
   "engines": {
     "node": ">=22.6"

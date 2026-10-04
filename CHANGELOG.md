@@ -2,6 +2,12 @@
 
 Notable changes to `@ksankar/pi-monitor`.
 
+## 0.1.1
+
+- Declare host-provided Pi packages (`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) in `peerDependencies`, per Pi package conventions.
+- Add `pi.image` gallery preview.
+- Document usage with a screenshot.
+
 ## 0.1.0
 
 First release.
