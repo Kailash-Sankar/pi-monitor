@@ -276,7 +276,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerMessageRenderer(WAKE_TYPE, (message, _options, theme) => {
     const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
     box.addChild(
-      new Text(`${theme.fg("accent", "⏱ monitor")} ${message.content}`, 0, 0),
+      new Text(`${theme.fg("accent", "⏱")} ${message.content}`, 0, 0),
     );
     return box;
   });

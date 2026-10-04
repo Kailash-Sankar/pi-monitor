@@ -19,8 +19,8 @@ It costs zero model tokens while waiting.
 ## Install
 
 ```bash
-pi install npm:pi-monitor          # once published
-pi install git:github.com/<you>/pi-monitor   # via git
+pi install npm:@ksankar/pi-monitor
+pi install git:github.com/Kailash-Sankar/pi-monitor
 ```
 
 Try it locally during development:
