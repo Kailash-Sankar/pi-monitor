@@ -228,10 +228,12 @@ export class MonitorManager {
     const stderrReader = createLineReader(handleLine, MAX_LINE_LENGTH);
 
     child.stdout?.on("data", (chunk: Buffer) => {
+      matcher.onActivity(this.hooks.now());
       writeOut(chunk);
       stdoutReader.write(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
+      matcher.onActivity(this.hooks.now());
       writeOut(chunk);
       stderrReader.write(chunk);
     });
@@ -268,7 +270,9 @@ export class MonitorManager {
       this.fire(id, { kind: "error", message });
     };
 
-    child.on("exit", (code, signal) => settle(code, signal));
+    // Use "close", not "exit": close fires after stdout/stderr have been fully
+    // drained. Finalizing on "exit" can drop output still in the pipe.
+    child.on("close", (code, signal) => settle(code, signal));
     child.on("error", (err) => fail(err.message));
 
     this.hooks.changed();

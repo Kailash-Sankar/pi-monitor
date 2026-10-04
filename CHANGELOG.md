@@ -2,6 +2,11 @@
 
 Notable changes to `@ksankar/pi-monitor`.
 
+## 0.2.2
+
+- Finalize a monitor on the child's `close` event instead of `exit`. Node may emit `exit` while stdout/stderr are still draining, and finalizing then could drop the last output (and any match in it).
+- Renew the quiet deadline on every output chunk, not only on complete lines. Newline-free output such as `\r` progress bars now counts as activity, matching the documented "any output renews it".
+
 ## 0.2.1
 
 - Fix: remove a finished monitor's temp output directory when it is pruned. Previously the directory outlived the pruned entry until the process exited.

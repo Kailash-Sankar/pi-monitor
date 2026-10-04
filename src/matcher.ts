@@ -79,6 +79,15 @@ export class ConditionMatcher {
     return { kind: "exited", code, signal };
   }
 
+  /**
+   * Record raw output activity. Renews the quiet deadline even when a chunk does
+   * not complete a line (e.g. `\r` progress output or long unterminated lines).
+   */
+  onActivity(now: number): void {
+    if (this.isDone) return;
+    this.lastActivityAt = now;
+  }
+
   /** Advance the clock. Returns a reason if the process went quiet. */
   onTick(now: number): FireReason | null {
     if (this.isDone) return null;

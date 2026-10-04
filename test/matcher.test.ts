@@ -75,6 +75,13 @@ test("output renews the quiet deadline", () => {
   assert.deepEqual(m.onTick(9000), { kind: "quiet", silentMs: 5000 });
 });
 
+test("onActivity renews the quiet deadline without a complete line", () => {
+  const m = new ConditionMatcher({ timeoutMs: 5000 }, 0);
+  m.onActivity(4000);
+  assert.equal(m.onTick(8000), null); // 4000ms since activity
+  assert.deepEqual(m.onTick(9000), { kind: "quiet", silentMs: 5000 });
+});
+
 test("quiet detection is disabled when timeoutMs is 0 or omitted", () => {
   const m = new ConditionMatcher({}, 0);
   assert.equal(m.onTick(10_000_000), null);

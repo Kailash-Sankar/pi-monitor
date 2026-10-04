@@ -18,9 +18,15 @@ class FakeChild extends EventEmitter {
   kill(): boolean {
     return true;
   }
-  exit(code: number | null, signal: string | null = null): void {
+  /** Process ended, but stdio may still be open. */
+  exitOnly(code: number | null, signal: string | null = null): void {
     this.exitCode = code;
     this.emit("exit", code, signal);
+  }
+  /** Process ended and stdio closed, which is the manager's finalize signal. */
+  close(code: number | null, signal: string | null = null): void {
+    this.exitCode = code;
+    this.emit("close", code, signal);
   }
   out(text: string): void {
     this.stdout.emit("data", Buffer.from(text));
@@ -66,15 +72,15 @@ test("fires on a matching line and never again", () => {
   children[0].out("ready\n");
   assert.equal(woken.length, 1);
   assert.equal(woken[0].cause?.kind, "matched");
-  children[0].exit(0);
-  assert.equal(woken.length, 1, "exit after a match must not wake again");
+  children[0].close(0);
+  assert.equal(woken.length, 1, "close after a match must not wake again");
   mgr.shutdown();
 });
 
 test("fires on exit and records the exit code", () => {
   const { mgr, woken, children } = setup();
   const record = mgr.createProcess({ command: "x" });
-  children[0].exit(3);
+  children[0].close(3);
   assert.equal(woken.length, 1);
   assert.equal(woken[0].cause?.kind, "exited");
   assert.equal(record.exitCode, 3);
@@ -86,7 +92,7 @@ test("a trailing partial line is matched at exit", () => {
   mgr.createProcess({ command: "x", match: "ready" });
   children[0].out("ready"); // no newline
   assert.equal(woken.length, 0);
-  children[0].exit(0);
+  children[0].close(0);
   assert.equal(woken.length, 1);
   assert.equal(woken[0].cause?.kind, "matched");
   mgr.shutdown();
@@ -98,8 +104,46 @@ test("stop prevents any later wake", () => {
   assert.equal(mgr.stop(record.id), "stopped");
   assert.equal(mgr.stop(record.id), "not-running");
   children[0].out("ready\n");
-  children[0].exit(0);
+  children[0].close(0);
   assert.equal(woken.length, 0);
+  mgr.shutdown();
+});
+
+test("finalizes on close, not exit, so late stdout is not dropped", () => {
+  const { mgr, woken, children } = setup();
+  mgr.createProcess({ command: "x" });
+  children[0].exitOnly(0);
+  assert.equal(woken.length, 0, "must not finalize on exit while stdio is open");
+  children[0].close(0);
+  assert.equal(woken.length, 1);
+  mgr.shutdown();
+});
+
+test("newline-free output renews the quiet deadline", async () => {
+  const woken: MonitorRecord[] = [];
+  const children: FakeChild[] = [];
+  const spawner = ((_c: string, _o: unknown) => {
+    const c = new FakeChild();
+    children.push(c);
+    return c;
+  }) as unknown as typeof import("node:child_process").spawn;
+  const mgr = new MonitorManager(
+    { now: () => Date.now(), wake: (r) => woken.push(r), changed: () => {} },
+    { spawn: spawner },
+  );
+  // timeout 300ms; emit a small chunk every 50ms with no newline for 400ms
+  mgr.createProcess({ command: "x", timeoutSeconds: 0.3 });
+  for (let i = 0; i < 8; i++) {
+    children[0].out("tick ");
+    await delay(50);
+  }
+  assert.equal(woken.length, 0, "activity should have renewed the deadline");
+  await delay(600); // now silent for longer than the threshold
+  assert.equal(
+    woken.filter((w) => w.cause?.kind === "quiet").length,
+    1,
+    "should fire quiet once the output actually stops",
+  );
   mgr.shutdown();
 });
 
