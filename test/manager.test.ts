@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   MonitorManager,
   type ManagerHooks,
@@ -138,6 +140,19 @@ test("prunes finished monitors after the retention window", () => {
   assert.equal(mgr.list().length, 1);
   advance(6 * 60 * 1000);
   assert.equal(mgr.list().length, 0);
+  mgr.shutdown();
+});
+
+test("pruning removes the temp output directory", async () => {
+  const { mgr, advance } = setup();
+  const record = mgr.createProcess({ command: "x" });
+  const dir = dirname(record.outputPath!);
+  assert.equal(existsSync(dir), true);
+  mgr.stop(record.id);
+  advance(6 * 60 * 1000);
+  assert.equal(mgr.list().length, 0, "entry should be pruned");
+  await delay(100); // disposal happens on stream close
+  assert.equal(existsSync(dir), false, "temp dir should be removed on prune");
   mgr.shutdown();
 });
 

@@ -39,8 +39,12 @@ export class ConditionMatcher {
    */
   constructor(options: MatcherOptions, now: number) {
     if (options.match !== undefined && options.match !== "") {
+      // g/y make RegExp.test() stateful via lastIndex; we only care whether a
+      // line matches at all, so drop them. Dedupe the rest, which RegExp rejects.
+      const rawFlags = options.flags ?? "";
+      const flags = [...new Set(rawFlags.replace(/[gy]/g, ""))].join("");
       try {
-        this.pattern = new RegExp(options.match, options.flags ?? "");
+        this.pattern = new RegExp(options.match, flags);
       } catch (err) {
         throw new Error(`invalid match pattern: ${(err as Error).message}`);
       }

@@ -2,6 +2,13 @@
 
 Notable changes to `@ksankar/pi-monitor`.
 
+## 0.2.1
+
+- Fix: remove a finished monitor's temp output directory when it is pruned. Previously the directory outlived the pruned entry until the process exited.
+- Sanitize regex `flags`: drop stateful `g`/`y`, which could make matching position-dependent (`y` could miss a match not at the start of a line).
+- Truncate the matched line shown in the wake message (was up to 64 KB).
+- Clarify that firing stops the command's process group.
+
 ## 0.2.0
 
 - Prune finished monitors after a 5-minute retention window, so `MonitorList` and `/monitors` do not grow unbounded.

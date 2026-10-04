@@ -387,7 +387,10 @@ export class MonitorManager {
     for (const [id, entry] of this.entries) {
       if (entry.record.status === "running") continue;
       const endedAt = entry.record.endedAt ?? entry.record.startedAt;
-      if (now - endedAt >= RETAIN_FINISHED_MS) this.entries.delete(id);
+      if (now - endedAt >= RETAIN_FINISHED_MS) {
+        this.dispose(entry);
+        this.entries.delete(id);
+      }
     }
   }
 

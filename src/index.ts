@@ -25,8 +25,10 @@ function describeCause(record: MonitorRecord): string {
   const cause = record.cause;
   if (!cause) return "unknown";
   switch (cause.kind) {
-    case "matched":
-      return `output matched: ${cause.line.trim()}`;
+    case "matched": {
+      const line = cause.line.trim();
+      return `output matched: ${line.length > 200 ? `${line.slice(0, 200)}…` : line}`;
+    }
     case "exited":
       if (cause.signal) return `process ended (signal ${cause.signal})`;
       return `process exited with code ${cause.code ?? "unknown"}`;
@@ -108,9 +110,10 @@ export default function (pi: ExtensionAPI) {
     description:
       "Run a shell command in the background and wake you once when it finishes, " +
       "matches a pattern, or goes quiet. Use this instead of blocking or polling " +
-      "(no `sleep && check` loops). Fires once, then stops the command and retires. " +
-      "Use it to wait for a condition, not to keep a process running. Output is " +
-      "captured to a temp file whose path is included in the wake.",
+      "(no `sleep && check` loops). Fires once, then stops the command and its " +
+      "process group, then retires. Use it to wait for a condition, not to keep a " +
+      "process running. Output is captured to a temp file whose path is included " +
+      "in the wake.",
     promptSnippet: "Monitor a background command and wake once on a condition",
     promptGuidelines: [
       "Prefer Monitor over blocking or polling when a command may take more than a few seconds.",

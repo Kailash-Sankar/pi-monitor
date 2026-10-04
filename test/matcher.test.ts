@@ -42,6 +42,15 @@ test("rejects invalid flags", () => {
   assert.throws(() => new ConditionMatcher({ match: "x", flags: "zz" }, 0), /invalid match pattern/);
 });
 
+test("drops stateful g/y flags so matching is not position-dependent", () => {
+  // Sticky (y) would require the match at index 0 and miss a prefix.
+  const sticky = new ConditionMatcher({ match: "ready", flags: "y" }, 0);
+  assert.notEqual(sticky.onLine("xx ready", 1), null);
+
+  const both = new ConditionMatcher({ match: "ready", flags: "gy" }, 0);
+  assert.notEqual(both.onLine("xx ready", 1), null);
+});
+
 test("fires on exit with code and signal", () => {
   const m = new ConditionMatcher({}, 0);
   assert.deepEqual(m.onExit(1), { kind: "exited", code: 1, signal: null });
