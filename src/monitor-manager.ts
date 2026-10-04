@@ -68,6 +68,7 @@ interface Entry {
   stream?: ReturnType<typeof createWriteStream>;
   dir?: string;
   written: number;
+  wakeSent?: boolean;
 }
 
 const DEFAULT_TIMEOUT_SECONDS = 300;
@@ -137,6 +138,7 @@ export class MonitorManager {
   private readonly hooks: ManagerHooks;
   private readonly spawnProcess: typeof spawn;
   private seq = 0;
+  private shuttingDown = false;
 
   constructor(hooks: ManagerHooks, options: ManagerOptions = {}) {
     this.hooks = hooks;
@@ -338,6 +340,7 @@ export class MonitorManager {
 
   /** Stop everything and remove temp output. Idempotent. */
   shutdown(): void {
+    this.shuttingDown = true;
     for (const entry of this.entries.values()) {
       if (entry.interval) clearInterval(entry.interval);
       if (entry.timer) clearTimeout(entry.timer);
@@ -410,7 +413,35 @@ export class MonitorManager {
     if (entry.interval) clearInterval(entry.interval);
     if (entry.timer) clearTimeout(entry.timer);
     killTree(entry.child);
-    this.hooks.wake(entry.record);
     this.hooks.changed();
+    this.deliverWake(entry);
+  }
+
+  /**
+   * Deliver the wake only once the capture stream has closed, so the outputPath
+   * in the wake message is complete. A match fire ends the stream here; exit and
+   * quiet fires have already ended it in settle(). Waking on "close" also covers
+   * a failed stream, which emits "close" without "finish".
+   */
+  private deliverWake(entry: Entry): void {
+    if (entry.wakeSent) return;
+    const send = (): void => {
+      if (entry.wakeSent || this.shuttingDown) return;
+      entry.wakeSent = true;
+      this.hooks.wake(entry.record);
+    };
+    const stream = entry.stream;
+    if (!stream || stream.closed || stream.destroyed) {
+      send();
+      return;
+    }
+    stream.once("close", send);
+    if (!stream.writableEnded) {
+      try {
+        stream.end();
+      } catch {
+        // already ending
+      }
+    }
   }
 }

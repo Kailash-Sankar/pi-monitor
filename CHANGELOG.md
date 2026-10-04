@@ -2,6 +2,11 @@
 
 Notable changes to `@ksankar/pi-monitor`.
 
+## 0.2.3
+
+- Deliver the wake only after the capture stream has closed, so the `outputPath` in the wake message always points at a complete file. Previously a wake could arrive while the log was still flushing and a synchronous read saw a partial file.
+- Add a regression test that reads the capture file from the wake hook.
+
 ## 0.2.2
 
 - Finalize a monitor on the child's `close` event instead of `exit`. Node may emit `exit` while stdout/stderr are still draining, and finalizing then could drop the last output (and any match in it).
