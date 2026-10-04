@@ -7,16 +7,20 @@
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream, mkdtempSync } from "node:fs";
+import { createWriteStream, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConditionMatcher, type FireReason } from "./matcher.ts";
+import { createLineReader } from "./lines.ts";
 
 export type MonitorKind = "process" | "timer";
 export type MonitorStatus = "running" | "fired" | "stopped";
 
 /** Why a monitor fired. Process conditions come from the matcher. */
-export type FireCause = FireReason | { kind: "elapsed"; afterMs: number };
+export type FireCause =
+  | FireReason
+  | { kind: "elapsed"; afterMs: number }
+  | { kind: "error"; message: string };
 
 export interface MonitorRecord {
   id: string;
@@ -36,6 +40,9 @@ export interface MonitorRecord {
   firedAt?: number;
 }
 
+/** Outcome of stopping a monitor, so callers can report accurately. */
+export type StopResult = "stopped" | "not-running" | "unknown";
+
 export interface ManagerHooks {
   /** Deliver the wake to the agent. Called once per monitor. */
   wake(record: MonitorRecord): void;
@@ -52,18 +59,25 @@ interface Entry {
   timer?: ReturnType<typeof setTimeout>;
   interval?: ReturnType<typeof setInterval>;
   stream?: ReturnType<typeof createWriteStream>;
-  buffer: string;
+  dir?: string;
+  written: number;
 }
 
 const DEFAULT_TIMEOUT_SECONDS = 300;
+const MAX_LINE_LENGTH = 64 * 1024;
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+/** Node clamps setTimeout delays above this and fires almost immediately. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * Kill an entire process tree. Because children are spawned detached, their pid
- * is the process-group id, so a negative pid signals the whole group. Escalates
- * to SIGKILL if the group is still alive shortly after SIGTERM.
+ * is the process-group id, so a negative pid signals the whole group. This runs
+ * on every fire, including a clean exit, so a command that backgrounds a child
+ * and exits does not leave that child orphaned. Escalates to SIGKILL if the
+ * group is still alive shortly after SIGTERM.
  */
 function killTree(child: ReturnType<typeof spawn> | undefined): void {
-  if (!child || child.pid === undefined || child.exitCode !== null) return;
+  if (!child || child.pid === undefined) return;
   const pid = child.pid;
   const signalGroup = (sig: NodeJS.Signals): void => {
     try {
@@ -106,14 +120,20 @@ export class MonitorManager {
     cwd?: string;
   }): MonitorRecord {
     const now = this.hooks.now();
+    const timeoutSeconds = opts.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0) {
+      throw new Error("timeoutSeconds must be a non-negative number");
+    }
+    const timeoutMs = timeoutSeconds * 1000;
+
+    // Build the matcher first: an invalid pattern must throw before any
+    // temp dir or file handle is created.
+    const matcher = new ConditionMatcher({ match: opts.match, timeoutMs }, now);
+
     const id = String(++this.seq);
     const dir = mkdtempSync(join(tmpdir(), "pi-monitor-"));
     const outputPath = join(dir, "output.log");
     const stream = createWriteStream(outputPath, { flags: "a" });
-    const timeoutMs = (opts.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
-
-    // Throws on an invalid pattern, before anything is spawned.
-    const matcher = new ConditionMatcher({ match: opts.match, timeoutMs }, now);
 
     const record: MonitorRecord = {
       id,
@@ -125,7 +145,7 @@ export class MonitorManager {
       outputPath,
       status: "running",
     };
-    const entry: Entry = { record, matcher, stream, buffer: "" };
+    const entry: Entry = { record, matcher, stream, dir, written: 0 };
     this.entries.set(id, entry);
 
     // detached spawns its own process group so we can kill the whole tree.
@@ -138,69 +158,101 @@ export class MonitorManager {
     });
     entry.child = child;
 
-    const onChunk = (chunk: Buffer): void => {
-      stream.write(chunk);
-      entry.buffer += chunk.toString();
-      let idx = entry.buffer.indexOf("\n");
-      while (idx >= 0) {
-        const line = entry.buffer.slice(0, idx);
-        entry.buffer = entry.buffer.slice(idx + 1);
-        const cause = matcher.onLine(line, this.hooks.now());
-        if (cause) {
-          this.fire(id, cause);
-          return;
-        }
-        idx = entry.buffer.indexOf("\n");
+    // Cap the captured log so a chatty command cannot fill the disk.
+    const writeOut = (chunk: Buffer): void => {
+      if (entry.written >= MAX_LOG_BYTES) return;
+      const remaining = MAX_LOG_BYTES - entry.written;
+      if (chunk.length <= remaining) {
+        stream.write(chunk);
+        entry.written += chunk.length;
+        return;
       }
+      stream.write(chunk.subarray(0, remaining));
+      entry.written = MAX_LOG_BYTES;
+      stream.write("\n[pi-monitor: output truncated]\n");
     };
-    child.stdout?.on("data", onChunk);
-    child.stderr?.on("data", onChunk);
+
+    const handleLine = (line: string): void => {
+      const cause = matcher.onLine(line, this.hooks.now());
+      if (cause) this.fire(id, cause);
+    };
+
+    // Separate readers and buffers per stream, so interleaved stdout/stderr
+    // cannot synthesize a line that never existed.
+    const stdoutReader = createLineReader(handleLine, MAX_LINE_LENGTH);
+    const stderrReader = createLineReader(handleLine, MAX_LINE_LENGTH);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      writeOut(chunk);
+      stdoutReader.write(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      writeOut(chunk);
+      stderrReader.write(chunk);
+    });
 
     if (timeoutMs > 0) {
       const interval = setInterval(() => {
         const cause = matcher.onTick(this.hooks.now());
         if (cause) this.fire(id, cause);
-      }, Math.min(1000, timeoutMs));
+      }, Math.max(100, Math.min(1000, timeoutMs)));
       interval.unref?.();
       entry.interval = interval;
     }
 
+    let settled = false;
     const settle = (code: number | null, signal: string | null): void => {
-      stream.end();
+      if (settled) return;
+      settled = true;
       if (entry.interval) clearInterval(entry.interval);
-      // Flush a trailing partial line so the final output is still matched.
-      if (entry.buffer.length > 0) {
-        const cause = matcher.onLine(entry.buffer, this.hooks.now());
-        entry.buffer = "";
-        if (cause) {
-          this.fire(id, cause);
-          return;
-        }
-      }
+      // Flush trailing fragments so the final line is still matched.
+      stdoutReader.flush();
+      stderrReader.flush();
+      stream.end();
       const cause = matcher.onExit(code, signal);
       if (cause) this.fire(id, cause);
     };
 
+    const fail = (message: string): void => {
+      if (settled) return;
+      settled = true;
+      if (entry.interval) clearInterval(entry.interval);
+      stdoutReader.flush();
+      stderrReader.flush();
+      stream.end();
+      this.fire(id, { kind: "error", message });
+    };
+
     child.on("exit", (code, signal) => settle(code, signal));
-    child.on("error", () => settle(null, "spawn error"));
+    child.on("error", (err) => fail(err.message));
 
     this.hooks.changed();
     return record;
   }
 
   createTimer(opts: { prompt: string; delaySeconds: number; label?: string }): MonitorRecord {
+    const delaySeconds = opts.delaySeconds;
+    if (!Number.isFinite(delaySeconds) || delaySeconds < 0) {
+      throw new Error("delaySeconds must be a non-negative number");
+    }
+    const afterMs = delaySeconds * 1000;
+    if (afterMs > MAX_TIMER_MS) {
+      throw new Error(
+        `delaySeconds is too large (max ${Math.floor(MAX_TIMER_MS / 1000)})`,
+      );
+    }
+
     const now = this.hooks.now();
     const id = String(++this.seq);
-    const afterMs = Math.max(0, opts.delaySeconds) * 1000;
     const record: MonitorRecord = {
       id,
       kind: "timer",
-      label: opts.label ?? `check in ${opts.delaySeconds}s`,
+      label: opts.label ?? `check in ${delaySeconds}s`,
       prompt: opts.prompt,
       startedAt: now,
       status: "running",
     };
-    const entry: Entry = { record, buffer: "" };
+    const entry: Entry = { record, written: 0 };
     this.entries.set(id, entry);
 
     const timer = setTimeout(() => {
@@ -217,32 +269,34 @@ export class MonitorManager {
     return [...this.entries.values()].map((e) => e.record);
   }
 
-  get(id: string): MonitorRecord | undefined {
-    return this.entries.get(id)?.record;
-  }
-
-  /** Stop a monitor without waking the agent. Returns false if unknown. */
-  stop(id: string): boolean {
+  /** Stop a running monitor without waking the agent. */
+  stop(id: string): StopResult {
     const entry = this.entries.get(id);
-    if (!entry) return false;
-    if (entry.record.status === "running") {
-      entry.record.status = "stopped";
-      if (entry.interval) clearInterval(entry.interval);
-      if (entry.timer) clearTimeout(entry.timer);
-      killTree(entry.child);
-      entry.stream?.end();
-    }
+    if (!entry) return "unknown";
+    if (entry.record.status !== "running") return "not-running";
+    entry.record.status = "stopped";
+    if (entry.interval) clearInterval(entry.interval);
+    if (entry.timer) clearTimeout(entry.timer);
+    killTree(entry.child);
+    entry.stream?.end();
     this.hooks.changed();
-    return true;
+    return "stopped";
   }
 
-  /** Stop everything. Idempotent. Safe to call from session_shutdown. */
+  /** Stop everything and remove temp output. Idempotent. */
   shutdown(): void {
     for (const entry of this.entries.values()) {
       if (entry.interval) clearInterval(entry.interval);
       if (entry.timer) clearTimeout(entry.timer);
       if (entry.record.status === "running") killTree(entry.child);
       entry.stream?.end();
+      if (entry.dir) {
+        try {
+          rmSync(entry.dir, { recursive: true, force: true });
+        } catch {
+          // best effort
+        }
+      }
     }
     this.entries.clear();
   }
@@ -253,6 +307,7 @@ export class MonitorManager {
     entry.record.status = "fired";
     entry.record.cause = cause;
     entry.record.firedAt = this.hooks.now();
+    if (cause.kind === "exited") entry.record.exitCode = cause.code;
     if (entry.interval) clearInterval(entry.interval);
     if (entry.timer) clearTimeout(entry.timer);
     killTree(entry.child);

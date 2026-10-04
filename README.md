@@ -38,10 +38,13 @@ pi -e ./pi-monitor
 
 ### `Monitor` — watch a command
 
-Run a command in the background and wake the agent once on a condition.
+Run a command in the background and wake the agent once on a condition. It
+waits for a condition, then **stops the command** — it is not a process
+supervisor. If you need something to keep running (a dev server), start it
+separately and use `Monitor` only to wait for it.
 
 ```
-Monitor command="npm run dev" match="listening on" timeoutSeconds=120 onDone="Run the test suite against the dev server."
+Monitor command="until curl -sf localhost:3000/health; do sleep 1; done" onDone="The server is up; run the tests."
 ```
 
 Returns immediately with an id. Output is captured to a temp file whose path is included in the wake.
@@ -50,7 +53,7 @@ Returns immediately with an id. Output is captured to a temp file whose path is 
 |---|---|
 | `command` | Shell command to run in the background. |
 | `match` | Optional regex. Wake when an output line matches. |
-| `timeoutSeconds` | Silence threshold. Any output renews it. Default 300. `0` disables. |
+| `timeoutSeconds` | Silence threshold. Any output renews it. Default 300. `0` disables. The command is **stopped** when it fires. |
 | `onDone` | What to do when it fires — delivered as the wake instruction. |
 | `label` | Short human-readable label. |
 
@@ -69,7 +72,7 @@ Inspect and cancel monitors. The footer also shows a live count, e.g. `⏱ 1 mon
 ## Design
 
 - **One job.** Watch a background command and wake the agent once.
-- **One-shot.** Fires once, then retires. Re-arm explicitly to watch again.
+- **One-shot.** Fires once, then stops the command and retires. Re-arm explicitly to watch again.
 - **Interrupt-driven.** Zero tokens while waiting.
 - **Process-group aware.** Commands run in their own group; stopping a monitor kills the whole tree, including grandchildren.
 - **Pure core.** Condition logic is a standalone, unit-tested module with no timers, processes, or I/O.

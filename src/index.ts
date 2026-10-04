@@ -17,11 +17,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import {
-  MonitorManager,
-  type FireCause,
-  type MonitorRecord,
-} from "./monitor-manager.ts";
+import { MonitorManager, type MonitorRecord } from "./monitor-manager.ts";
 
 const WAKE_TYPE = "pi-monitor";
 
@@ -38,6 +34,8 @@ function describeCause(record: MonitorRecord): string {
       return `no output for ${Math.round(cause.silentMs / 1000)}s`;
     case "elapsed":
       return `delay elapsed (${Math.round(cause.afterMs / 1000)}s)`;
+    case "error":
+      return `failed to start: ${cause.message}`;
   }
 }
 
@@ -110,8 +108,9 @@ export default function (pi: ExtensionAPI) {
     description:
       "Run a shell command in the background and wake you once when it finishes, " +
       "matches a pattern, or goes quiet. Use this instead of blocking or polling " +
-      "(no `sleep && check` loops). Fires once, then retires. Output is captured to " +
-      "a temp file whose path is included in the wake.",
+      "(no `sleep && check` loops). Fires once, then stops the command and retires. " +
+      "Use it to wait for a condition, not to keep a process running. Output is " +
+      "captured to a temp file whose path is included in the wake.",
     promptSnippet: "Monitor a background command and wake once on a condition",
     promptGuidelines: [
       "Prefer Monitor over blocking or polling when a command may take more than a few seconds.",
@@ -129,7 +128,8 @@ export default function (pi: ExtensionAPI) {
       timeoutSeconds: Type.Optional(
         Type.Number({
           description:
-            "Silence threshold in seconds. Any output renews it. Default 300. 0 disables.",
+            "Silence threshold in seconds. Any output renews it. Default 300. " +
+            "0 disables. The command is stopped when this fires.",
         }),
       ),
       onDone: Type.Optional(
@@ -233,18 +233,14 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Monitor id, from MonitorList." }),
     }),
     async execute(_callId, params) {
-      const ok = manager.stop(params.id);
-      return {
-        content: [
-          {
-            type: "text",
-            text: ok
-              ? `Stopped monitor #${params.id}.`
-              : `No monitor with id ${params.id}.`,
-          },
-        ],
-        details: { stopped: ok },
-      };
+      const result = manager.stop(params.id);
+      const text =
+        result === "stopped"
+          ? `Stopped monitor #${params.id}.`
+          : result === "not-running"
+            ? `Monitor #${params.id} is not running.`
+            : `No monitor with id ${params.id}.`;
+      return { content: [{ type: "text", text }], details: { result } };
     },
   });
 
