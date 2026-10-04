@@ -2,6 +2,11 @@
 
 Notable changes to `@ksankar/pi-monitor`.
 
+## 0.2.4
+
+- Fix a hang in the exit path. The 0.2.3 change to finalize on `close` could deadlock: a command that backgrounds a descendant inheriting stdout/stderr (`sleep 30 &`) keeps the pipes open, so `close` never fired and the exit was never observed. The manager now reaps the process group on `exit` and finalizes on `close`, preserving both prompt exit handling and the fully-flushed wake guarantee.
+- Add a regression test with a real backgrounded descendant.
+
 ## 0.2.3
 
 - Deliver the wake only after the capture stream has closed, so the `outputPath` in the wake message always points at a complete file. Previously a wake could arrive while the log was still flushing and a synchronous read saw a partial file.

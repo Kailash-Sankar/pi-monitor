@@ -235,3 +235,22 @@ test("the wake hook sees a fully written capture file", async () => {
   assert.match(captured, /DONE/);
   mgr.shutdown();
 });
+
+test("reaps a backgrounded descendant so exit is detected (real process)", async () => {
+  const woken: MonitorRecord[] = [];
+  // Default (real) spawner.
+  const mgr = new MonitorManager({
+    now: () => Date.now(),
+    wake: (r) => woken.push(r),
+    changed: () => {},
+  });
+  try {
+    // The shell exits at once, but `sleep` inherits the stdio pipes. Without
+    // reaping the group on exit, "close" would never fire and this would hang.
+    mgr.createProcess({ command: "sleep 30 & echo spawned", timeoutSeconds: 0, label: "descendant" });
+    await until(() => woken.length === 1, 6000);
+    assert.equal(woken[0].cause?.kind, "exited");
+  } finally {
+    mgr.shutdown();
+  }
+});

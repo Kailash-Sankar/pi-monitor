@@ -249,22 +249,42 @@ export class MonitorManager {
       entry.interval = interval;
     }
 
-    let settled = false;
-    const settle = (code: number | null, signal: string | null): void => {
-      if (settled) return;
-      settled = true;
+    // Two separate signals, on purpose:
+    //   - "exit": the command's leader ended. Reap the rest of its process
+    //     group now, otherwise a backgrounded descendant that inherited the
+    //     stdio pipes keeps them open and "close" never fires.
+    //   - "close": stdout/stderr are drained, so the capture file is complete.
+    //     Only then do we finalize and wake.
+    let closed = false;
+    let exitRecorded = false;
+    let exitCode: number | null = null;
+    let exitSignal: string | null = null;
+
+    const onExit = (code: number | null, signal: string | null): void => {
+      if (exitRecorded || closed) return;
+      exitRecorded = true;
+      exitCode = code;
+      exitSignal = signal;
+      if (entry.record.status === "running") killTree(entry.child);
+    };
+
+    const finalize = (): void => {
+      if (closed) return;
+      closed = true;
       if (entry.interval) clearInterval(entry.interval);
       // Flush trailing fragments so the final line is still matched.
       stdoutReader.flush();
       stderrReader.flush();
       stream.end();
-      const cause = matcher.onExit(code, signal);
-      if (cause) this.fire(id, cause);
+      if (entry.record.status === "running") {
+        const cause = matcher.onExit(exitCode, exitSignal);
+        if (cause) this.fire(id, cause);
+      }
     };
 
     const fail = (message: string): void => {
-      if (settled) return;
-      settled = true;
+      if (closed) return;
+      closed = true;
       if (entry.interval) clearInterval(entry.interval);
       stdoutReader.flush();
       stderrReader.flush();
@@ -272,9 +292,15 @@ export class MonitorManager {
       this.fire(id, { kind: "error", message });
     };
 
-    // Use "close", not "exit": close fires after stdout/stderr have been fully
-    // drained. Finalizing on "exit" can drop output still in the pipe.
-    child.on("close", (code, signal) => settle(code, signal));
+    child.on("exit", (code, signal) => onExit(code, signal));
+    child.on("close", (code, signal) => {
+      // "close" also carries the code; use it if "exit" was not observed.
+      if (!exitRecorded) {
+        exitCode = code;
+        exitSignal = signal;
+      }
+      finalize();
+    });
     child.on("error", (err) => fail(err.message));
 
     this.hooks.changed();
