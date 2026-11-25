@@ -343,6 +343,14 @@ export class MonitorManager {
     return record;
   }
 
+  /** Whether a process or timer is still waiting to fire. */
+  hasRunning(): boolean {
+    for (const { record } of this.entries.values()) {
+      if (record.status === "running") return true;
+    }
+    return false;
+  }
+
   /** List monitors, pruning finished ones past the retention window. */
   list(): MonitorRecord[] {
     this.prune();

@@ -20,6 +20,17 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { MonitorManager, type MonitorRecord } from "./monitor-manager.ts";
 
 const WAKE_TYPE = "pi-monitor";
+const SESSION_LIVENESS = Symbol.for("@agegr/pi-web/session-liveness/v1");
+
+interface SessionLivenessRegistry {
+  version: number;
+  register(provider: {
+    name: string;
+    sessionId: string;
+    sessionFile?: string;
+    isActive(): boolean;
+  }): () => void;
+}
 
 function describeCause(record: MonitorRecord): string {
   const cause = record.cause;
@@ -68,6 +79,7 @@ export default function (pi: ExtensionAPI) {
   // Last context seen. Used for status repaints that happen from timers, where
   // no context is passed. Replaced on every session_start and tool call.
   let uiCtx: ExtensionContext | undefined;
+  let releaseLiveness: (() => void) | undefined;
 
   const manager = new MonitorManager({
     now: () => Date.now(),
@@ -290,10 +302,22 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     uiCtx = ctx;
+    releaseLiveness?.();
+    const registry = (globalThis as Record<symbol, SessionLivenessRegistry | undefined>)[SESSION_LIVENESS];
+    releaseLiveness = registry?.version === 1
+      ? registry.register({
+        name: "@ksankar/pi-monitor",
+        sessionId: ctx.sessionManager.getSessionId(),
+        sessionFile: ctx.sessionManager.getSessionFile() || undefined,
+        isActive: () => manager.hasRunning(),
+      })
+      : undefined;
     refreshStatus();
   });
 
   pi.on("session_shutdown", async () => {
+    releaseLiveness?.();
+    releaseLiveness = undefined;
     manager.shutdown();
   });
 }
