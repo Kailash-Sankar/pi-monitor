@@ -88,8 +88,7 @@ const RETAIN_FINISHED_MS = 5 * 60 * 1000;
  * a child and exits does not leave that child orphaned. Escalates to SIGKILL if
  * the group is still alive shortly after SIGTERM.
  *
- * On Windows the group model differs, so `taskkill /T /F` is used instead. That
- * path is untested here (developed on macOS).
+ * On Windows the group model differs, so `taskkill /T /F` is used instead.
  */
 function killTree(child: ReturnType<typeof spawn> | undefined): void {
   if (!child || child.pid === undefined) return;
@@ -194,12 +193,13 @@ export class MonitorManager {
     const entry: Entry = { record, matcher, stream, dir, written: 0 };
     this.entries.set(id, entry);
 
-    // detached spawns its own process group so we can kill the whole tree.
-    // Killing just the shell would orphan grandchildren (e.g. `sh -c 'a; b'`).
+    // POSIX needs a detached process group to reap descendants. Windows uses
+    // taskkill /T instead: a detached cmd.exe can lose PowerShell's piped output.
     const child = this.spawnProcess(opts.command, {
       shell: true,
       cwd: opts.cwd,
-      detached: true,
+      detached: process.platform !== "win32",
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
     entry.child = child;
